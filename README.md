@@ -157,13 +157,7 @@ npm run preview
 
 ---
 
-## 👥 Developers
 
-| Name | Role | GitHub | Contact |
-|---|---|---|---|
-| Aravindaswamy Gunturu | Full Stack Developer | [iarvindswamy](https://github.com/iarvindswamy) | 8522855282 |
-| Poojan Sri Paara | Full Stack Developer | [parapoojansri-hue](https://github.com/parapoojansri-hue) | 8309529483 |
-| Pavan Kumar Gade | Full Stack Developer | [pavankumargade09](https://github.com/pavankumargade09) | 8529927443 |
 
 ---
 
