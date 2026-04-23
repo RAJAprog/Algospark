@@ -479,7 +479,7 @@ const LoginPage = () => {
                                 }} 
                             />
                             <div>
-                                <div style={{ fontSize: '0.9rem', fontWeight: 800, color: '#1a1a2e', lineHeight: 1.1 }}>Mind Code</div>
+                                <div style={{ fontSize: '0.9rem', fontWeight: 800, color: '#1a1a2e', lineHeight: 1.1 }}>ALGOSPARK</div>
                                 <div style={{ fontSize: '0.5rem', color: '#94a3b8', letterSpacing: '0.14em', textTransform: 'uppercase' }}>Portal</div>
                             </div>
                         </Link>
