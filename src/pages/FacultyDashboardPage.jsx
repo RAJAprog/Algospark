@@ -712,12 +712,13 @@ export default function FacultyDashboardPage() {
         border: `1px solid ${T.border}`, borderRadius: 8, color: T.text, fontWeight: 700, cursor: "pointer" }}>
       ← Back to Dashboard
     </button>
-    <ResultsTable
-      examTitle={selectedExam.title}
-      examId={selectedExam.id}
-      exam={selectedExam}
-      collegeName={selectedExam.assignedColleges?.[0] || ""}
-    />
+   <ResultsTable
+     examTitle={selectedExam.title}
+     examId={selectedExam.id}
+     exam={selectedExam}
+     collegeName={selectedExam.assignedColleges?.[0] || ""}
+     tenants={tenants}
+   />
   </div>
 )}
             {view==="question_bank" && <QuestionBank  onClose={()=>setView("dashboard")} />}
