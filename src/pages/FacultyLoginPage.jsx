@@ -89,7 +89,7 @@ export default function FacultyLoginPage() {
             fontSize: '1.6rem', fontWeight: 900, letterSpacing: '-0.04em',
             background: 'linear-gradient(135deg,#3b82f6,#8b5cf6)',
             WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
-          }}>MIND CODE</span>
+          }}>ALGO SPARK</span>
           <p style={{ fontSize: '0.8rem', color: '#9ca3af', marginTop: '0.3rem', fontWeight: 500 }}>
             Faculty Portal
           </p>
