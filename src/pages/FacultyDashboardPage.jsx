@@ -647,7 +647,7 @@ export default function FacultyDashboardPage() {
       <nav style={{ background:T.nav,backdropFilter:"blur(12px)",borderBottom:`1px solid ${T.border}`,padding:"0.875rem 2rem",position:"sticky",top:0,zIndex:50 }}>
         <div style={{ maxWidth:"1280px",margin:"0 auto",display:"flex",justifyContent:"space-between",alignItems:"center" }}>
           <button onClick={()=>{setView("dashboard");setActiveModule(null);setExamPanelOpen(false);setExamTab(null);setActiveCreateType(null);setActiveFilterType(null);}} style={{ background:"none",border:"none",cursor:"pointer",padding:0 }}>
-            <span style={{ fontSize:"1.35rem",fontWeight:900,letterSpacing:"-0.04em",background:"linear-gradient(135deg,#3b82f6,#8b5cf6)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent" }}>MIND CODE</span>
+            <span style={{ fontSize:"1.35rem",fontWeight:900,letterSpacing:"-0.04em",background:"linear-gradient(135deg,#3b82f6,#8b5cf6)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent" }}>ALGO SPARK</span>
           </button>
           <div style={{ display:"flex",alignItems:"center",gap:"0.5rem" }}>
             <div style={{ display:"flex",gap:"0.25rem",background:isDark?"#0f172a":"#f1f5f9",padding:"0.25rem",borderRadius:"1rem",border:`1px solid ${T.border}` }}>
