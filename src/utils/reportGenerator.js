@@ -55,12 +55,10 @@
 
 //     let logoUrl = null;
 
-//     // Direct document lookup
 //     const directSnap = await getDoc(doc(db, 'colleges', collegeId));
 //     if (directSnap.exists()) {
 //       logoUrl = directSnap.data().logoUrl;
 //     } else {
-//       // Fallback: query by name field
 //       const q    = query(collection(db, 'colleges'), where('name', '==', collegeId));
 //       const snap = await getDocs(q);
 //       if (!snap.empty) logoUrl = snap.docs[0].data().logoUrl;
@@ -68,9 +66,8 @@
 
 //     if (!logoUrl) return null;
 
-//     // Try fetch with no-cors fallback
 //     try {
-//       const response = await fetch(logoUrl, { mode: 'cors' });
+//       const response = await fetch(logoUrl, { mode: 'cors', cache: 'no-cache' });
 //       if (!response.ok) throw new Error('fetch failed');
 //       const blob = await response.blob();
 //       return await new Promise((resolve, reject) => {
@@ -80,21 +77,16 @@
 //         reader.readAsDataURL(blob);
 //       });
 //     } catch {
-//       // Fallback: load via Image element (bypasses CORS for display-only)
 //       return await new Promise((resolve) => {
-//         const img    = new Image();
+//         const img       = new Image();
 //         img.crossOrigin = 'anonymous';
-//         img.onload  = () => {
+//         img.onload = () => {
 //           const canvas  = document.createElement('canvas');
-//           canvas.width  = img.width;
-//           canvas.height = img.height;
-//           const ctx = canvas.getContext('2d');
-//           ctx.drawImage(img, 0, 0);
-//           try {
-//             resolve(canvas.toDataURL('image/png'));
-//           } catch {
-//             resolve(null);
-//           }
+//           canvas.width  = img.naturalWidth  || 128;
+//           canvas.height = img.naturalHeight || 128;
+//           canvas.getContext('2d').drawImage(img, 0, 0);
+//           try { resolve(canvas.toDataURL('image/png')); }
+//           catch { resolve(null); }
 //         };
 //         img.onerror = () => resolve(null);
 //         img.src = logoUrl;
@@ -107,81 +99,199 @@
 // }
 
 // // ─────────────────────────────────────────────────────────────────────────────
-// // PAGE HEADER
-// //
-// // Layout (full-width, height 22mm):
-// //   LEFT  block (primary blue, 0 to W-65): college logo + name + subtitle
-// //   RIGHT block (accent purple, W-65 to W): AlgoSpark + Powered by MindSpark
+// // GET IMAGE NATURAL DIMENSIONS from a base64 data-URL
+// // Used to compute the correct aspect-ratio box for jsPDF addImage.
 // // ─────────────────────────────────────────────────────────────────────────────
-// function drawPageHeader(doc, collegeLogoDataUrl, collegeName) {
+// function getImageDimensions(dataUrl) {
+//   return new Promise((resolve) => {
+//     const img    = new Image();
+//     img.onload   = () => resolve({ w: img.naturalWidth, h: img.naturalHeight });
+//     img.onerror  = () => resolve({ w: 1, h: 1 });
+//     img.src      = dataUrl;
+//   });
+// }
+
+// // ─────────────────────────────────────────────────────────────────────────────
+// // COMPUTE FIT DIMENSIONS
+// // Fit `imgW × imgH` into a `maxW × maxH` box, preserving aspect ratio.
+// // Returns the final { fitW, fitH } in mm.
+// // ─────────────────────────────────────────────────────────────────────────────
+// function fitInBox(imgW, imgH, maxW, maxH) {
+//   if (!imgW || !imgH) return { fitW: maxW, fitH: maxH };
+//   const scale = Math.min(maxW / imgW, maxH / imgH);
+//   return { fitW: imgW * scale, fitH: imgH * scale };
+// }
+
+// // ─────────────────────────────────────────────────────────────────────────────
+// // PAGE HEADER  (async — must be awaited)
+// //
+// // Layout (full-width, height 22 mm):
+// //
+// //   LEFT block  (primary blue,   0 → SPLIT):
+// //     • College logo — aspect-ratio preserved, centred vertically in 16×16 mm box
+// //     • College name  + subtitle text
+// //
+// //   RIGHT block (accent purple, SPLIT → W):
+// //     • MindSpark logo (public/logo.png pre-loaded as algoLogoDataUrl)
+// //     • "MindSpark" bold text
+// //     • "Powered by MindSpark" small text
+// //
+// // The AlgoSpark/MindSpark logo is loaded ONCE per report via
+// // `loadAlgoSparkLogo()` and passed in so it doesn't re-fetch on every page.
+// // ─────────────────────────────────────────────────────────────────────────────
+
+// /** Load the MindSpark/AlgoSpark logo from the public folder as base64. */
+// export async function loadAlgoSparkLogo() {
+//   // The logo lives at /logo.png in the public folder (same as HomePage uses).
+//   // We try three paths in order so it works regardless of dev/prod base URL.
+//   const candidates = ['/logo.png', './logo.png', `${window.location.origin}/logo.png`];
+//   for (const path of candidates) {
+//     try {
+//       const res = await fetch(path, { cache: 'no-cache' });
+//       if (!res.ok) continue;
+//       const blob = await res.blob();
+//       const b64  = await new Promise((resolve, reject) => {
+//         const r   = new FileReader();
+//         r.onload  = () => resolve(r.result);
+//         r.onerror = reject;
+//         r.readAsDataURL(blob);
+//       });
+//       if (b64) return b64;
+//     } catch (_) { /* try next */ }
+//   }
+//   return null;
+// }
+
+// async function drawPageHeader(doc, collegeLogoDataUrl, collegeName, algoLogoDataUrl) {
 //   const W       = doc.internal.pageSize.getWidth();
-//   const HDR_H   = 22;
-//   const SPLIT   = W - 65;
+//   const HDR_H   = 24;           // header height in mm (slightly taller for logo room)
+//   const RIGHT_W = 68;           // width of the right (purple) block
+//   const SPLIT   = W - RIGHT_W;
 
 //   // ── Background blocks ────────────────────────────────────────────────────
 //   doc.setFillColor(...C.primary);
 //   doc.rect(0, 0, SPLIT, HDR_H, 'F');
 
 //   doc.setFillColor(...C.accent);
-//   doc.rect(SPLIT, 0, W - SPLIT, HDR_H, 'F');
+//   doc.rect(SPLIT, 0, RIGHT_W, HDR_H, 'F');
 
-//   // ── Left block: college logo ─────────────────────────────────────────────
-//   const LOGO_X = 5;
-//   const LOGO_Y = 3;
-//   const LOGO_W = 16;
-//   const LOGO_H = 16;
+//   // ── LEFT: College logo with correct aspect ratio ─────────────────────────
+//   const MAX_LOGO_W = 18;   // maximum width  (mm) the logo may occupy
+//   const MAX_LOGO_H = 18;   // maximum height (mm) the logo may occupy
+//   const LOGO_PAD_X = 4;    // gap from left edge
+//   const LOGO_PAD_Y = 3;    // gap from top edge
 
-//   if (collegeLogoDataUrl && typeof collegeLogoDataUrl === 'string' && collegeLogoDataUrl.startsWith('data:')) {
+//   let logoDrawW = MAX_LOGO_W;
+//   let logoDrawH = MAX_LOGO_H;
+//   let logoPosX  = LOGO_PAD_X;
+//   // Centre vertically inside the header
+//   let logoPosY  = (HDR_H - MAX_LOGO_H) / 2;
+
+//   if (
+//     collegeLogoDataUrl &&
+//     typeof collegeLogoDataUrl === 'string' &&
+//     collegeLogoDataUrl.startsWith('data:')
+//   ) {
 //     try {
+//       // Get actual pixel dimensions so we can preserve aspect ratio
+//       const { w: imgW, h: imgH } = await getImageDimensions(collegeLogoDataUrl);
+//       const { fitW, fitH }       = fitInBox(imgW, imgH, MAX_LOGO_W, MAX_LOGO_H);
+
+//       logoDrawW = fitW;
+//       logoDrawH = fitH;
+//       // Horizontally: flush-left within the pad zone; vertically: centred
+//       logoPosX  = LOGO_PAD_X;
+//       logoPosY  = (HDR_H - fitH) / 2;
+
 //       const fmt = collegeLogoDataUrl.startsWith('data:image/png') ? 'PNG' : 'JPEG';
-//       doc.addImage(collegeLogoDataUrl, fmt, LOGO_X, LOGO_Y, LOGO_W, LOGO_H);
+//       doc.addImage(collegeLogoDataUrl, fmt, logoPosX, logoPosY, logoDrawW, logoDrawH);
 //     } catch (e) {
-//       _drawLogoPlaceholder(doc, LOGO_X, LOGO_Y, LOGO_W, LOGO_H, collegeName);
+//       console.warn('drawPageHeader: college logo addImage failed', e.message);
+//       _drawLogoPlaceholder(doc, logoPosX, logoPosY, MAX_LOGO_W, MAX_LOGO_H, collegeName);
+//       logoDrawW = MAX_LOGO_W;
+//       logoDrawH = MAX_LOGO_H;
 //     }
 //   } else {
-//     _drawLogoPlaceholder(doc, LOGO_X, LOGO_Y, LOGO_W, LOGO_H, collegeName);
+//     _drawLogoPlaceholder(doc, logoPosX, logoPosY, MAX_LOGO_W, MAX_LOGO_H, collegeName);
 //   }
 
-//   // ── Left block: college name + subtitle ──────────────────────────────────
-//   const textX = LOGO_X + LOGO_W + 4;
+//   // ── LEFT: College name + subtitle ────────────────────────────────────────
+//   const textX = LOGO_PAD_X + MAX_LOGO_W + 3;   // always start text after the max logo box
 //   doc.setTextColor(...C.white);
 
-//   const displayName = collegeName
-//     ? (collegeName.length > 34 ? collegeName.slice(0, 32) + '...' : collegeName)
-//     : 'Institution';
+//   const rawName     = collegeName || 'Institution';
+//   const displayName = rawName.length > 32 ? rawName.slice(0, 30) + '…' : rawName;
+
 //   doc.setFontSize(10);
 //   doc.setFont('helvetica', 'bold');
 //   doc.text(displayName, textX, 11);
 
 //   doc.setFontSize(6.5);
 //   doc.setFont('helvetica', 'normal');
-//   doc.text('Student Assessment Report | AlgoSpark Learning Hub', textX, 16.5);
+//   doc.text('Student Assessment Report | MindSpark Learning Hub', textX, 17);
 
-//   // ── Right block: AlgoSpark branding ──────────────────────────────────────
-//   const rightCX = SPLIT + (W - SPLIT) / 2;
+//   // ── RIGHT: MindSpark logo + text ─────────────────────────────────────────
+//   const rightCX   = SPLIT + RIGHT_W / 2;   // horizontal centre of right block
+//   const ALGO_MAX_W = 14;
+//   const ALGO_MAX_H = 14;
 
+//   if (
+//     algoLogoDataUrl &&
+//     typeof algoLogoDataUrl === 'string' &&
+//     algoLogoDataUrl.startsWith('data:')
+//   ) {
+//     try {
+//       const { w: aW, h: aH } = await getImageDimensions(algoLogoDataUrl);
+//       const { fitW, fitH }   = fitInBox(aW, aH, ALGO_MAX_W, ALGO_MAX_H);
+
+//       // Place the logo centred horizontally, near the top of the right block
+//       const algoPosX = rightCX - fitW / 2;
+//       const algoPosY = (HDR_H / 2 - fitH) / 2;   // upper half
+
+//       const aFmt = algoLogoDataUrl.startsWith('data:image/png') ? 'PNG' : 'JPEG';
+//       doc.addImage(algoLogoDataUrl, aFmt, algoPosX, algoPosY, fitW, fitH);
+
+//       // Text below the logo
+//       doc.setTextColor(...C.white);
+//       doc.setFontSize(9);
+//       doc.setFont('helvetica', 'bold');
+//       doc.text('MindSpark', rightCX, algoPosY + fitH + 4.5, { align: 'center' });
+
+//       doc.setFontSize(5.5);
+//       doc.setFont('helvetica', 'normal');
+//       doc.text('Powered by MindSpark', rightCX, algoPosY + fitH + 9, { align: 'center' });
+//     } catch (e) {
+//       // Fallback: text-only right block
+//       _drawRightBlockTextOnly(doc, rightCX, HDR_H);
+//     }
+//   } else {
+//     _drawRightBlockTextOnly(doc, rightCX, HDR_H);
+//   }
+
+//   doc.setTextColor(...C.dark);
+// }
+
+// /** Text-only fallback for the right header block when logo is unavailable. */
+// function _drawRightBlockTextOnly(doc, rightCX, HDR_H) {
 //   doc.setTextColor(...C.white);
 //   doc.setFontSize(13);
 //   doc.setFont('helvetica', 'bold');
-//   doc.text('AlgoSpark', rightCX, 11, { align: 'center' });
-
+//   doc.text('MindSpark', rightCX, HDR_H / 2 - 1, { align: 'center' });
 //   doc.setFontSize(6);
 //   doc.setFont('helvetica', 'normal');
-//   doc.text('Powered by MindSpark', rightCX, 17, { align: 'center' });
-
-//   doc.setTextColor(...C.dark);
+//   doc.text('Powered by MindSpark', rightCX, HDR_H / 2 + 5, { align: 'center' });
 // }
 
 // function _drawLogoPlaceholder(doc, x, y, w, h, collegeName) {
 //   doc.setFillColor(255, 255, 255);
 //   doc.roundedRect(x, y, w, h, 2, 2, 'F');
 //   doc.setTextColor(...C.primary);
-//   doc.setFontSize(10);
+//   doc.setFontSize(11);
 //   doc.setFont('helvetica', 'bold');
 //   doc.text(
 //     (collegeName || 'C').charAt(0).toUpperCase(),
 //     x + w / 2,
-//     y + h / 2 + 3.5,
+//     y + h / 2 + 4,
 //     { align: 'center' },
 //   );
 // }
@@ -200,13 +310,13 @@
 //   doc.setFontSize(7);
 //   doc.setTextColor(...C.mid);
 //   doc.setFont('helvetica', 'normal');
-//   doc.text('AlgoSpark Learning Hub | Powered by MindSpark', 10, H - 5);
+//   doc.text('MindSpark Learning Hub | Powered by MindSpark', 10, H - 5);
 //   doc.text(`Page ${pageNum} of ${totalPages}`, W / 2, H - 5, { align: 'center' });
 //   doc.text(`Generated: ${new Date().toLocaleDateString('en-IN')}`, W - 10, H - 5, { align: 'right' });
 // }
 
 // // ─────────────────────────────────────────────────────────────────────────────
-// // STAT BOXES  (used on overall report cover)
+// // STAT BOXES
 // // ─────────────────────────────────────────────────────────────────────────────
 // function drawStatBoxes(doc, stats, y) {
 //   const W      = doc.internal.pageSize.getWidth();
@@ -404,7 +514,6 @@
 
 // // ─────────────────────────────────────────────────────────────────────────────
 // // SHARED TABLE CONFIG
-// // All tables use the same base styles for visual consistency.
 // // ─────────────────────────────────────────────────────────────────────────────
 // const BASE_TABLE = {
 //   styles: {
@@ -419,17 +528,13 @@
 //   theme:              'grid',
 // };
 
-// // ── Uniform column definitions ────────────────────────────────────────────────
-// // Used in ALL student-wise metric tables (Participation, Performance, Daily/Weekly)
-// // so every table lines up perfectly column-by-column.
 // const METRIC_COL_WIDTHS = {
-//   sno:      10,   // column 0: Sno
-//   for_:     72,   // column 1: For / Section / Assessment Type
-//   rating:   22,   // column 2: Rating / Avg Score
-//   feedback: null, // column 3: Feedback (fills remaining space)
+//   sno:      10,
+//   for_:     72,
+//   rating:   22,
+//   feedback: null,
 // };
 
-// // Daily/weekly table adds a "Completed" column between for_ and rating
 // const DW_COL_WIDTHS = {
 //   sno:       10,
 //   type:      60,
@@ -440,9 +545,9 @@
 
 // function metricColumnStyles() {
 //   return {
-//     0: { cellWidth: METRIC_COL_WIDTHS.sno,    halign: 'center' },
-//     1: { cellWidth: METRIC_COL_WIDTHS.for_,   halign: 'left'   },
-//     2: { cellWidth: METRIC_COL_WIDTHS.rating,  halign: 'center', fontStyle: 'bold' },
+//     0: { cellWidth: METRIC_COL_WIDTHS.sno,   halign: 'center' },
+//     1: { cellWidth: METRIC_COL_WIDTHS.for_,  halign: 'left'   },
+//     2: { cellWidth: METRIC_COL_WIDTHS.rating, halign: 'center', fontStyle: 'bold' },
 //     3: { halign: 'left' },
 //   };
 // }
@@ -457,7 +562,6 @@
 //   };
 // }
 
-// // Rating colour helper (green / orange / red by value)
 // function ratingCellColor(data, colIndex) {
 //   if (data.section === 'body' && data.column.index === colIndex) {
 //     const raw = String(data.cell.raw ?? '');
@@ -470,9 +574,9 @@
 // }
 
 // // ─────────────────────────────────────────────────────────────────────────────
-// // OVERALL REPORT
+// // OVERALL REPORT  (now async — loads logos before drawing)
 // // ─────────────────────────────────────────────────────────────────────────────
-// export function generateOverallReport({
+// export async function generateOverallReport({
 //   examTitle,
 //   exam,
 //   submissions,
@@ -480,6 +584,9 @@
 //   collegeName,
 //   collegeLogoDataUrl,
 // }) {
+//   // Pre-load the MindSpark logo once; reuse across all pages
+//   const algoLogoDataUrl = await loadAlgoSparkLogo();
+
 //   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
 //   const W   = doc.internal.pageSize.getWidth();
 
@@ -497,7 +604,6 @@
 //     ? `${((maxScore / maxPossible) * 100).toFixed(3)}%`
 //     : '0.000%';
 
-//   // Department grouping
 //   const deptMap = {};
 //   submissions.forEach(s => {
 //     const dept = s.branch || s.department || s.section || 'Unknown';
@@ -509,12 +615,12 @@
 //   const deptKeys       = Object.keys(deptMap);
 
 //   // ── PAGE 1 ────────────────────────────────────────────────────────────────
-//   drawPageHeader(doc, collegeLogoDataUrl, collegeName);
+//   await drawPageHeader(doc, collegeLogoDataUrl, collegeName, algoLogoDataUrl);
 
 //   doc.setFontSize(13);
 //   doc.setFont('helvetica', 'bold');
 //   doc.setTextColor(...C.dark);
-//   doc.text('ALGOSPARK LEARNING HUB - OVERALL REPORT', W / 2, 30, { align: 'center' });
+//   doc.text('MINDSPARK LEARNING HUB - OVERALL REPORT', W / 2, 32, { align: 'center' });
 
 //   doc.setFontSize(9.5);
 //   doc.setFont('helvetica', 'normal');
@@ -522,12 +628,12 @@
 //   const dayLabel = exam?.dayNumber
 //     ? `Consolidated Report - Day ${exam.dayNumber}`
 //     : 'Consolidated Report';
-//   doc.text(dayLabel, W / 2, 36, { align: 'center' });
+//   doc.text(dayLabel, W / 2, 38, { align: 'center' });
 
 //   doc.setFontSize(11);
 //   doc.setFont('helvetica', 'bold');
 //   doc.setTextColor(...C.dark);
-//   doc.text(examTitle || 'Grand Test', W / 2, 42, { align: 'center' });
+//   doc.text(examTitle || 'Grand Test', W / 2, 44, { align: 'center' });
 
 //   let cy = drawStatBoxes(doc, [
 //     { label: 'Total Attempts', value: total,             color: C.primary },
@@ -535,7 +641,7 @@
 //     { label: 'Qualified',      value: qualified,         color: C.accent  },
 //     { label: 'Not Qualified',  value: total - qualified, color: C.red     },
 //     { label: 'Highest %',      value: highestPct,        color: C.teal    },
-//   ], 48);
+//   ], 50);
 //   cy += 3;
 
 //   cy = sectionHeading(doc, 'Attendance by Branch', cy);
@@ -547,19 +653,12 @@
 //       body: deptKeys.map(dept => {
 //         const attempted  = deptMap[dept].attempted;
 //         const registered = deptRegistered[dept] || attempted;
-//         return [
-//           dept,
-//           String(attempted),
-//           String(Math.max(0, registered - attempted)),
-//           String(registered),
-//         ];
+//         return [dept, String(attempted), String(Math.max(0, registered - attempted)), String(registered)];
 //       }),
 //       headStyles:   { fillColor: C.primary, textColor: C.white, fontStyle: 'bold' },
 //       columnStyles: {
 //         0: { halign: 'left', fontStyle: 'bold', cellWidth: 55 },
-//         1: { halign: 'center' },
-//         2: { halign: 'center' },
-//         3: { halign: 'center' },
+//         1: { halign: 'center' }, 2: { halign: 'center' }, 3: { halign: 'center' },
 //       },
 //     });
 //     cy = doc.lastAutoTable.finalY + 5;
@@ -580,15 +679,12 @@
 //       headStyles:   { fillColor: C.primary, textColor: C.white, fontStyle: 'bold' },
 //       columnStyles: {
 //         0: { halign: 'left', fontStyle: 'bold', cellWidth: 55 },
-//         1: { halign: 'center' },
-//         2: { halign: 'center' },
-//         3: { halign: 'center' },
+//         1: { halign: 'center' }, 2: { halign: 'center' }, 3: { halign: 'center' },
 //       },
 //     });
 //     cy = doc.lastAutoTable.finalY + 5;
 //   }
 
-//   // Section-wise (only if >1 distinct sections)
 //   const sectionStudentMap = {};
 //   submissions.forEach(s => {
 //     const sec = s.section || '-';
@@ -612,18 +708,16 @@
 //       headStyles:   { fillColor: C.teal, textColor: C.white, fontStyle: 'bold' },
 //       columnStyles: {
 //         0: { halign: 'left', fontStyle: 'bold', cellWidth: 55 },
-//         1: { halign: 'center' },
-//         2: { halign: 'center' },
-//         3: { halign: 'center' },
+//         1: { halign: 'center' }, 2: { halign: 'center' }, 3: { halign: 'center' },
 //       },
 //     });
 //     cy = doc.lastAutoTable.finalY + 5;
 //   }
 
-//   // ── PAGE 2: Assessment details ─────────────────────────────────────────────
+//   // ── PAGE 2 ────────────────────────────────────────────────────────────────
 //   doc.addPage();
-//   drawPageHeader(doc, collegeLogoDataUrl, collegeName);
-//   cy = 28;
+//   await drawPageHeader(doc, collegeLogoDataUrl, collegeName, algoLogoDataUrl);
+//   cy = 30;
 
 //   const sectionBreakdown = {};
 //   questions.forEach(q => {
@@ -644,7 +738,7 @@
 //     head: [['FIELD', 'VALUE']],
 //     body: [
 //       ['Assessment Name',    examTitle || '-'],
-//       ['Platform',           'AlgoSpark Learning Hub | Powered by MindSpark'],
+//       ['Platform',           'MindSpark Learning Hub | Powered by MindSpark'],
 //       ['Questions Count',    String(questions.length)],
 //       ['Students Attempted', String(total)],
 //       ['Not Attempted',      String(Math.max(0, notAttemptedTotal))],
@@ -663,9 +757,7 @@
 
 //   if (Object.keys(sectionBreakdown).length) {
 //     cy = sectionHeading(doc, 'Section / Module Breakdown', cy);
-//     const secBody = Object.entries(sectionBreakdown).map(([k, v]) => [
-//       k, String(v.count), String(v.marks),
-//     ]);
+//     const secBody = Object.entries(sectionBreakdown).map(([k, v]) => [k, String(v.count), String(v.marks)]);
 //     secBody.push(['TOTAL', String(questions.length), String(maxPossible)]);
 //     autoTable(doc, {
 //       ...BASE_TABLE,
@@ -675,8 +767,7 @@
 //       headStyles:   { fillColor: C.accent, textColor: C.white, fontStyle: 'bold' },
 //       columnStyles: {
 //         0: { halign: 'left', fontStyle: 'bold', cellWidth: 90 },
-//         1: { halign: 'center' },
-//         2: { halign: 'center' },
+//         1: { halign: 'center' }, 2: { halign: 'center' },
 //       },
 //       didParseCell: data => {
 //         if (data.section === 'body' && data.row.index === secBody.length - 1)
@@ -688,8 +779,8 @@
 
 //   // ── PAGE 3: Charts ─────────────────────────────────────────────────────────
 //   doc.addPage();
-//   drawPageHeader(doc, collegeLogoDataUrl, collegeName);
-//   cy = 28;
+//   await drawPageHeader(doc, collegeLogoDataUrl, collegeName, algoLogoDataUrl);
+//   cy = 30;
 
 //   if (deptKeys.length) {
 //     drawPieChart(doc, 40, cy + 28, 22, [
@@ -700,14 +791,11 @@
 //   }
 
 //   const overallDist = scoreDistribution(submissions, maxPossible).reverse();
-//   cy = drawBarChart(
-//     doc, 14, cy, W - 28, 50,
+//   cy = drawBarChart(doc, 14, cy, W - 28, 50,
 //     overallDist.map(d => ({ label: d.label, value: d.value })),
-//     'Overall Performance - Student Score Distribution',
-//     C.blue,
-//   );
+//     'Overall Performance - Student Score Distribution', C.blue);
 
-//   Object.entries(sectionBreakdown).forEach(([secName, secData]) => {
+//   for (const [secName, secData] of Object.entries(sectionBreakdown)) {
 //     const secMax    = secData.marks || 1;
 //     const secScores = submissions.map(s => {
 //       const brk      = s.scoreBreakdown || [];
@@ -719,21 +807,18 @@
 //     const dist = scoreDistribution(secScores, secMax).reverse();
 //     if (cy > 210) {
 //       doc.addPage();
-//       drawPageHeader(doc, collegeLogoDataUrl, collegeName);
-//       cy = 28;
+//       await drawPageHeader(doc, collegeLogoDataUrl, collegeName, algoLogoDataUrl);
+//       cy = 30;
 //     }
-//     cy = drawBarChart(
-//       doc, 14, cy, W - 28, 48,
+//     cy = drawBarChart(doc, 14, cy, W - 28, 48,
 //       dist.map(d => ({ label: d.label, value: d.value })),
-//       `${secName} - Student Score Distribution`,
-//       C.blue,
-//     );
-//   });
+//       `${secName} - Student Score Distribution`, C.blue);
+//   }
 
 //   // ── PAGE 4: Rankings ───────────────────────────────────────────────────────
 //   doc.addPage();
-//   drawPageHeader(doc, collegeLogoDataUrl, collegeName);
-//   cy = 28;
+//   await drawPageHeader(doc, collegeLogoDataUrl, collegeName, algoLogoDataUrl);
+//   cy = 30;
 
 //   const sorted = [...submissions].sort((a, b) => (b.totalScore ?? 0) - (a.totalScore ?? 0));
 //   const bottom = [...submissions].sort((a, b) => (a.totalScore ?? 0) - (b.totalScore ?? 0));
@@ -749,21 +834,15 @@
 //   };
 //   const rankHead = [['#', 'NAME', 'REGD NO.', 'BRANCH', 'SECTION', 'SCORE', 'PERCENTAGE']];
 //   const rankRow  = (s, i) => [
-//     String(i + 1),
-//     s.studentName  || '-',
-//     s.studentRegNo || '-',
-//     s.branch       || s.department || '-',
-//     s.section      || '-',
+//     String(i + 1), s.studentName || '-', s.studentRegNo || '-',
+//     s.branch || s.department || '-', s.section || '-',
 //     String(s.totalScore ?? 0),
-//     maxPossible > 0
-//       ? `${(((s.totalScore ?? 0) / maxPossible) * 100).toFixed(2)}%`
-//       : '0.00%',
+//     maxPossible > 0 ? `${(((s.totalScore ?? 0) / maxPossible) * 100).toFixed(2)}%` : '0.00%',
 //   ];
 
 //   cy = sectionHeading(doc, 'Top 10 Students', cy, C.green);
 //   autoTable(doc, {
-//     ...BASE_TABLE,
-//     startY: cy,
+//     ...BASE_TABLE, startY: cy,
 //     head: rankHead,
 //     body: sorted.slice(0, 10).map(rankRow),
 //     headStyles:   { fillColor: C.green, textColor: C.white, fontStyle: 'bold' },
@@ -773,8 +852,7 @@
 
 //   cy = sectionHeading(doc, 'Bottom 10 Students', cy, C.red);
 //   autoTable(doc, {
-//     ...BASE_TABLE,
-//     startY: cy,
+//     ...BASE_TABLE, startY: cy,
 //     head: rankHead,
 //     body: bottom.slice(0, 10).map(rankRow),
 //     headStyles:   { fillColor: C.red, textColor: C.white, fontStyle: 'bold' },
@@ -784,8 +862,8 @@
 
 //   if (cy > 210) {
 //     doc.addPage();
-//     drawPageHeader(doc, collegeLogoDataUrl, collegeName);
-//     cy = 28;
+//     await drawPageHeader(doc, collegeLogoDataUrl, collegeName, algoLogoDataUrl);
+//     cy = 30;
 //   }
 
 //   cy = sectionHeading(doc, 'Complete Student Rankings', cy);
@@ -805,16 +883,11 @@
 //         return String(secScore);
 //       });
 //       return [
-//         `${i + 1}`,
-//         s.studentName  || '-',
-//         s.studentRegNo || '-',
-//         s.branch       || s.department || '-',
-//         s.section      || '-',
+//         `${i + 1}`, s.studentName || '-', s.studentRegNo || '-',
+//         s.branch || s.department || '-', s.section || '-',
 //         ...secScores,
 //         String(s.totalScore ?? 0),
-//         maxPossible > 0
-//           ? `${(((s.totalScore ?? 0) / maxPossible) * 100).toFixed(1)}%`
-//           : '0.0%',
+//         maxPossible > 0 ? `${(((s.totalScore ?? 0) / maxPossible) * 100).toFixed(1)}%` : '0.0%',
 //         String(s.violations ?? 0),
 //       ];
 //     }),
@@ -851,9 +924,9 @@
 // }
 
 // // ─────────────────────────────────────────────────────────────────────────────
-// // STUDENT-WISE REPORT
+// // STUDENT-WISE REPORT  (now async)
 // // ─────────────────────────────────────────────────────────────────────────────
-// export function generateStudentWiseReport({
+// export async function generateStudentWiseReport({
 //   examTitle,
 //   exam,
 //   submissions,
@@ -868,12 +941,13 @@
 //     return;
 //   }
 
+//   const algoLogoDataUrl = await loadAlgoSparkLogo();
+
 //   const doc         = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
 //   const W           = doc.internal.pageSize.getWidth();
 //   const maxPossible = questions.reduce((a, q) => a + (q.marks || 0), 0) || 100;
 //   const sorted      = [...submissions].sort((a, b) => (b.totalScore ?? 0) - (a.totalScore ?? 0));
 
-//   // Section -> questions map
 //   const sectionMap = {};
 //   questions.forEach(q => {
 //     const key = q.sectionName || q.section || q.category
@@ -894,21 +968,11 @@
 //   };
 
 //   const computeCrossExamStats = studentId => {
-//     const studentSubs = allSubmissions.filter(
-//       s => s.studentId === studentId && s.status === 'completed'
-//     );
+//     const studentSubs = allSubmissions.filter(s => s.studentId === studentId && s.status === 'completed');
 //     const daily  = studentSubs.filter(s => examTypeOf(s.examId) === 'DAILY');
 //     const weekly = studentSubs.filter(s => examTypeOf(s.examId) === 'WEEKLY');
-//     const avgOf  = arr =>
-//       arr.length
-//         ? Math.round(arr.reduce((a, s) => a + (s.totalScore ?? s.score ?? 0), 0) / arr.length)
-//         : 0;
-//     return {
-//       dailyCompleted:  daily.length,
-//       dailyAvgScore:   avgOf(daily),
-//       weeklyCompleted: weekly.length,
-//       weeklyAvgScore:  avgOf(weekly),
-//     };
+//     const avgOf  = arr => arr.length ? Math.round(arr.reduce((a, s) => a + (s.totalScore ?? s.score ?? 0), 0) / arr.length) : 0;
+//     return { dailyCompleted: daily.length, dailyAvgScore: avgOf(daily), weeklyCompleted: weekly.length, weeklyAvgScore: avgOf(weekly) };
 //   };
 
 //   const getSectionPct = (sub, secName) => {
@@ -917,9 +981,7 @@
 //     const secMax = secQs.reduce((a, q) => a + (q.marks || 0), 0);
 //     if (secMax === 0) return null;
 //     const brk      = sub.scoreBreakdown || [];
-//     const secScore = brk
-//       .filter(b => secQs.find(q => q.id === b.questionId))
-//       .reduce((a, b) => a + (b.score || 0), 0);
+//     const secScore = brk.filter(b => secQs.find(q => q.id === b.questionId)).reduce((a, b) => a + (b.score || 0), 0);
 //     return Math.round((secScore / secMax) * 100);
 //   };
 
@@ -931,10 +993,10 @@
 //     return Math.round(val);
 //   };
 
-//   // ── One page per student ───────────────────────────────────────────────────
-//   sorted.forEach((sub, idx) => {
+//   for (let idx = 0; idx < sorted.length; idx++) {
+//     const sub = sorted[idx];
 //     if (idx > 0) doc.addPage();
-//     drawPageHeader(doc, collegeLogoDataUrl, collegeName);
+//     await drawPageHeader(doc, collegeLogoDataUrl, collegeName, algoLogoDataUrl);
 
 //     const score  = sub.totalScore ?? 0;
 //     const pct    = maxPossible > 0 ? (score / maxPossible) * 100 : 0;
@@ -942,73 +1004,56 @@
 //     const status = overallStatus(pct);
 //     const passed = pct >= 40;
 
-//     // ── Student info banner ──────────────────────────────────────────────
-//     const bannerY = 25;
+//     const bannerY = 27;
 //     const bannerH = 32;
 //     doc.setFillColor(...C.light);
 //     doc.roundedRect(10, bannerY, W - 20, bannerH, 3, 3, 'F');
 //     doc.setFillColor(...C.primary);
 //     doc.roundedRect(10, bannerY, 4, bannerH, 2, 2, 'F');
 
-//     // Report title inside banner
 //     doc.setFontSize(9.5);
 //     doc.setFont('helvetica', 'bold');
 //     doc.setTextColor(...C.dark);
-//     doc.text('AlgoSpark - Student Performance Report', W / 2, bannerY + 8, { align: 'center' });
+//     doc.text('MindSpark - Student Performance Report', W / 2, bannerY + 8, { align: 'center' });
 
-//     // Left info columns
 //     const leftPairs = [
 //       ['Student Name:', sub.studentName  || '-'],
 //       ['Student ID:',   sub.studentRegNo || sub.studentId || '-'],
 //       ['Status:',       status],
 //     ];
 //     leftPairs.forEach(([lbl, val], i) => {
-//       doc.setFontSize(8);
-//       doc.setFont('helvetica', 'bold');
-//       doc.setTextColor(...C.mid);
+//       doc.setFontSize(8); doc.setFont('helvetica', 'bold'); doc.setTextColor(...C.mid);
 //       doc.text(lbl, 17, bannerY + 14 + i * 6);
-//       doc.setFont('helvetica', 'normal');
-//       doc.setTextColor(...C.dark);
+//       doc.setFont('helvetica', 'normal'); doc.setTextColor(...C.dark);
 //       doc.text(String(val), 52, bannerY + 14 + i * 6);
 //     });
 
-//     // Right info columns
 //     const rightPairs = [
-//       ['Branch:',  sub.branch  || sub.department || '-'],
-//       ['Section:', sub.section || exam?.batch    || '-'],
-//       ['Exam:',    examTitle   || '-'],
+//       ['Branch:',  sub.branch || sub.department || '-'],
+//       ['Section:', sub.section || exam?.batch || '-'],
+//       ['Exam:',    examTitle || '-'],
 //     ];
 //     const midX = W / 2 + 4;
 //     rightPairs.forEach(([lbl, val], i) => {
-//       doc.setFontSize(8);
-//       doc.setFont('helvetica', 'bold');
-//       doc.setTextColor(...C.mid);
+//       doc.setFontSize(8); doc.setFont('helvetica', 'bold'); doc.setTextColor(...C.mid);
 //       doc.text(lbl, midX, bannerY + 14 + i * 6);
-//       doc.setFont('helvetica', 'normal');
-//       doc.setTextColor(...C.dark);
+//       doc.setFont('helvetica', 'normal'); doc.setTextColor(...C.dark);
 //       const v = String(val);
 //       doc.text(v.length > 22 ? v.slice(0, 20) + '...' : v, midX + 22, bannerY + 14 + i * 6);
 //     });
 
-//     // Score badge (top-right of banner)
 //     doc.setFillColor(...(passed ? C.green : C.red));
 //     doc.roundedRect(W - 30, bannerY + 2, 20, 13, 2, 2, 'F');
-//     doc.setFontSize(11);
-//     doc.setFont('helvetica', 'bold');
-//     doc.setTextColor(...C.white);
+//     doc.setFontSize(11); doc.setFont('helvetica', 'bold'); doc.setTextColor(...C.white);
 //     doc.text(pctStr, W - 20, bannerY + 10, { align: 'center' });
-//     doc.setFontSize(5.5);
-//     doc.setFont('helvetica', 'normal');
+//     doc.setFontSize(5.5); doc.setFont('helvetica', 'normal');
 //     doc.text(passed ? 'PASS' : 'FAIL', W - 20, bannerY + 15, { align: 'center' });
 //     doc.setTextColor(...C.dark);
 
 //     let cy = bannerY + bannerH + 4;
 
-//     // ── Overall Performance bar ──────────────────────────────────────────
 //     cy = sectionHeading(doc, 'Overall Performance', cy);
-//     doc.setFontSize(7.5);
-//     doc.setFont('helvetica', 'normal');
-//     doc.setTextColor(...C.mid);
+//     doc.setFontSize(7.5); doc.setFont('helvetica', 'normal'); doc.setTextColor(...C.mid);
 //     doc.text(`Score: ${score} / ${maxPossible}  |  Accuracy: ${pctStr}`, 14, cy + 3);
 //     const pbW = W - 28;
 //     doc.setFillColor(220, 225, 235);
@@ -1018,20 +1063,14 @@
 //     doc.setTextColor(...C.dark);
 //     cy += 15;
 
-//     // ── Participation Metrics ────────────────────────────────────────────
-//     // Only 2 rows: Overall Assessment + Placement Readiness
-//     // (Daily/Weekly moved to its own dedicated table below — NO duplicates here)
 //     cy = sectionHeading(doc, 'Participation Metrics', cy);
-
 //     const totalExamsAssigned  = sub.totalExamsAssigned  ?? 1;
 //     const totalExamsAttempted = sub.totalExamsAttempted ?? (sub.status === 'completed' ? 1 : 0);
 //     const overallParticipationPct = totalExamsAssigned > 0
-//       ? Math.round((totalExamsAttempted / totalExamsAssigned) * 100)
-//       : null;
+//       ? Math.round((totalExamsAttempted / totalExamsAssigned) * 100) : null;
 
 //     autoTable(doc, {
-//       ...BASE_TABLE,
-//       startY: cy,
+//       ...BASE_TABLE, startY: cy,
 //       head: [['Sno', 'For', 'Rating', 'Feedback']],
 //       body: [
 //         ['1', 'Overall Assessment',  ratingStr(overallParticipationPct), feedbackLabel(overallParticipationPct)],
@@ -1043,25 +1082,19 @@
 //     });
 //     cy = doc.lastAutoTable.finalY + 5;
 
-//     // ── Performance Metrics (section accuracy) ───────────────────────────
 //     cy = sectionHeading(doc, 'Performance Metrics', cy);
-
 //     const perfRows = allSectionNames.map((secName, i) => {
 //       const pctVal = getSectionPct(sub, secName);
 //       return [String(i + 1), secName, ratingStr(pctVal), feedbackLabel(pctVal)];
 //     });
-
-//     // Append MCQ / Coding summary rows only if both exist
 //     if (mcqMax > 0 && codingMax > 0) {
 //       const mcqPct    = Math.round(((sub.mcqScore    ?? 0) / mcqMax)    * 100);
 //       const codingPct = Math.round(((sub.codingScore ?? 0) / codingMax) * 100);
 //       perfRows.push(['-', 'MCQ Total',    ratingStr(mcqPct),    feedbackLabel(mcqPct)]);
 //       perfRows.push(['-', 'Coding Total', ratingStr(codingPct), feedbackLabel(codingPct)]);
 //     }
-
 //     autoTable(doc, {
-//       ...BASE_TABLE,
-//       startY: cy,
+//       ...BASE_TABLE, startY: cy,
 //       head: [['Sno', 'Section / Module', 'Rating', 'Feedback']],
 //       body: perfRows,
 //       headStyles:   { fillColor: C.accent, textColor: C.white, fontStyle: 'bold' },
@@ -1070,29 +1103,24 @@
 //     });
 //     cy = doc.lastAutoTable.finalY + 5;
 
-//     // ── Section Score Details ────────────────────────────────────────────
 //     cy = sectionHeading(doc, 'Section Score Details', cy);
-
 //     const scoreDetailRows = allSectionNames.map(secName => {
 //       const secQs    = sectionMap[secName];
 //       const secMax   = secQs.reduce((a, q) => a + (q.marks || 0), 0);
 //       const brk      = sub.scoreBreakdown || [];
-//       const secScore = brk
-//         .filter(b => secQs.find(q => q.id === b.questionId))
-//         .reduce((a, b) => a + (b.score || 0), 0);
+//       const secScore = brk.filter(b => secQs.find(q => q.id === b.questionId)).reduce((a, b) => a + (b.score || 0), 0);
 //       const secPct   = secMax > 0 ? `${Math.round((secScore / secMax) * 100)}%` : '-';
 //       return [secName, `${secScore} / ${secMax}`, secPct, String(secQs.length)];
 //     });
 //     scoreDetailRows.push(['TOTAL', `${score} / ${maxPossible}`, pctStr, String(questions.length)]);
 
 //     autoTable(doc, {
-//       ...BASE_TABLE,
-//       startY: cy,
+//       ...BASE_TABLE, startY: cy,
 //       head: [['Section / Module', 'Score', 'Accuracy', 'Questions']],
 //       body: scoreDetailRows,
 //       headStyles:   { fillColor: C.teal, textColor: C.white, fontStyle: 'bold' },
 //       columnStyles: {
-//         0: { halign: 'left',   fontStyle: 'bold', cellWidth: 80 },
+//         0: { halign: 'left', fontStyle: 'bold', cellWidth: 80 },
 //         1: { halign: 'center', cellWidth: 30 },
 //         2: { halign: 'center', fontStyle: 'bold', cellWidth: 24 },
 //         3: { halign: 'center', cellWidth: 20 },
@@ -1106,42 +1134,22 @@
 //     });
 //     cy = doc.lastAutoTable.finalY + 5;
 
-//     // ── Daily & Weekly Assessment Performance ────────────────────────────
-//     // This is its OWN separate table — NOT mixed into Participation Metrics.
 //     if (cy < 248) {
 //       cy = sectionHeading(doc, 'Daily and Weekly Assessment Performance', cy, C.brown);
-
-//       const crossStats = allSubmissions.length > 0
-//         ? computeCrossExamStats(sub.studentId)
-//         : null;
-
+//       const crossStats = allSubmissions.length > 0 ? computeCrossExamStats(sub.studentId) : null;
 //       const dailyCompleted  = crossStats?.dailyCompleted  ?? sub.dailyCompleted  ?? null;
 //       const dailyAvgRaw     = crossStats?.dailyAvgScore   ?? sub.dailyAvgScore   ?? null;
 //       const weeklyCompleted = crossStats?.weeklyCompleted ?? sub.weeklyCompleted  ?? null;
 //       const weeklyAvgRaw    = crossStats?.weeklyAvgScore  ?? sub.weeklyAvgScore  ?? null;
-
 //       const dailyPct  = toPercent(dailyAvgRaw,  maxPossible);
 //       const weeklyPct = toPercent(weeklyAvgRaw, maxPossible);
 
 //       autoTable(doc, {
-//         ...BASE_TABLE,
-//         startY: cy,
+//         ...BASE_TABLE, startY: cy,
 //         head: [['Sno', 'Assessment Type', 'Completed', 'Avg Score', 'Feedback']],
 //         body: [
-//           [
-//             '1',
-//             'Daily Assessments',
-//             dailyCompleted  !== null ? String(dailyCompleted)  : '-',
-//             ratingStr(dailyPct),
-//             feedbackLabel(dailyPct),
-//           ],
-//           [
-//             '2',
-//             'Weekly Assessments',
-//             weeklyCompleted !== null ? String(weeklyCompleted) : '-',
-//             ratingStr(weeklyPct),
-//             feedbackLabel(weeklyPct),
-//           ],
+//           ['1', 'Daily Assessments',  dailyCompleted  !== null ? String(dailyCompleted)  : '-', ratingStr(dailyPct),  feedbackLabel(dailyPct)],
+//           ['2', 'Weekly Assessments', weeklyCompleted !== null ? String(weeklyCompleted) : '-', ratingStr(weeklyPct), feedbackLabel(weeklyPct)],
 //         ],
 //         headStyles:   { fillColor: C.brown, textColor: C.white, fontStyle: 'bold' },
 //         columnStyles: dwColumnStyles(),
@@ -1150,20 +1158,13 @@
 //       cy = doc.lastAutoTable.finalY + 5;
 //     }
 
-//     // ── Proctoring warning ────────────────────────────────────────────────
 //     const viols = sub.violations ?? 0;
 //     if (viols > 0 && cy < 272) {
-//       doc.setFontSize(7.5);
-//       doc.setFont('helvetica', 'bold');
-//       doc.setTextColor(...C.red);
-//       doc.text(
-//         `WARNING: ${viols} proctoring violation${viols > 1 ? 's' : ''} recorded during this exam.`,
-//         10, cy,
-//       );
-//       doc.setTextColor(...C.dark);
-//       doc.setFont('helvetica', 'normal');
+//       doc.setFontSize(7.5); doc.setFont('helvetica', 'bold'); doc.setTextColor(...C.red);
+//       doc.text(`WARNING: ${viols} proctoring violation${viols > 1 ? 's' : ''} recorded during this exam.`, 10, cy);
+//       doc.setTextColor(...C.dark); doc.setFont('helvetica', 'normal');
 //     }
-//   });
+//   }
 
 //   const totalPages = doc.internal.getNumberOfPages();
 //   for (let i = 1; i <= totalPages; i++) {
@@ -1172,7 +1173,6 @@
 //   }
 //   doc.save(`AlgoSpark_StudentWise_Report_${(examTitle || 'Exam').replace(/\s+/g, '_')}.pdf`);
 // }
-
 
 
 
@@ -1450,11 +1450,11 @@ async function drawPageHeader(doc, collegeLogoDataUrl, collegeName, algoLogoData
       const aFmt = algoLogoDataUrl.startsWith('data:image/png') ? 'PNG' : 'JPEG';
       doc.addImage(algoLogoDataUrl, aFmt, algoPosX, algoPosY, fitW, fitH);
 
-      // Text below the logo
+      // Text below the logo — "AlgoSpark" bold, "Powered by MindSpark" small
       doc.setTextColor(...C.white);
       doc.setFontSize(9);
       doc.setFont('helvetica', 'bold');
-      doc.text('MindSpark', rightCX, algoPosY + fitH + 4.5, { align: 'center' });
+      doc.text('AlgoSpark', rightCX, algoPosY + fitH + 4.5, { align: 'center' });
 
       doc.setFontSize(5.5);
       doc.setFont('helvetica', 'normal');
@@ -1475,7 +1475,7 @@ function _drawRightBlockTextOnly(doc, rightCX, HDR_H) {
   doc.setTextColor(...C.white);
   doc.setFontSize(13);
   doc.setFont('helvetica', 'bold');
-  doc.text('MindSpark', rightCX, HDR_H / 2 - 1, { align: 'center' });
+  doc.text('AlgoSpark', rightCX, HDR_H / 2 - 1, { align: 'center' });
   doc.setFontSize(6);
   doc.setFont('helvetica', 'normal');
   doc.text('Powered by MindSpark', rightCX, HDR_H / 2 + 5, { align: 'center' });
@@ -1509,7 +1509,7 @@ function drawPageFooter(doc, pageNum, totalPages) {
   doc.setFontSize(7);
   doc.setTextColor(...C.mid);
   doc.setFont('helvetica', 'normal');
-  doc.text('MindSpark Learning Hub | Powered by MindSpark', 10, H - 5);
+  doc.text('AlgoSpark | Powered by MindSpark Learning Hub', 10, H - 5);
   doc.text(`Page ${pageNum} of ${totalPages}`, W / 2, H - 5, { align: 'center' });
   doc.text(`Generated: ${new Date().toLocaleDateString('en-IN')}`, W - 10, H - 5, { align: 'right' });
 }
